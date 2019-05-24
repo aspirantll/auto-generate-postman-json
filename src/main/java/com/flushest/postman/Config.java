@@ -1,5 +1,6 @@
 package com.flushest.postman;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -17,8 +18,22 @@ public class Config {
 
     private String basePackage;
 
+
+    public Config() {
+        this.setHost("localhost");
+        this.setPort("8080");
+        this.setDir("postman");
+        this.setBasePackage("com");
+    }
+
     public List<String> getHost() {
         return host;
+    }
+
+    public Config setHost(String host) {
+        String[] hostParts = host.split("\\.");
+        this.host = Arrays.asList(hostParts);
+        return this;
     }
 
     public Config setHost(List<String> host) {

@@ -7,10 +7,11 @@ import com.flushest.postman.model.*;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.BeanPostProcessor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.context.annotation.Bean;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
+import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -51,19 +52,8 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
     private Config config;
 
 
-    @ConditionalOnMissingBean(Config.class)
-    @Bean
-    public Config defaultConfig() {
-        return new Config()
-                .setHost(Arrays.asList("localhost"))
-                .setPort("10010")
-                .setDir("D://postman")
-                .setBasePackage("");
-    }
-
-
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        if(bean.getClass().isAnnotationPresent(RestController.class)) { //Controller对象
+        if(AnnotationUtils.getAnnotation(bean.getClass(), Controller.class) != null) { //Controller对象
             PostManCollection collection = new PostManCollection()
                     .setInfo(new PostManInfo()
                             .set_postman_id(UUID.randomUUID().toString())
@@ -74,7 +64,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
             collection.setItem(items);
 
             //获取类上路径
-            List<String> controllerPath = handleRequestPath(bean.getClass().getAnnotation(RequestMapping.class));
+            List<String> controllerPath = handleRequestPath(AnnotatedElementUtils.findMergedAnnotation(bean.getClass(), RequestMapping.class));
             //遍历所有方法
             for(Method method : bean.getClass().getMethods()) {
                 PostManItem item = new PostManItem()
@@ -82,14 +72,19 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                 PostManRequest request = new PostManRequest();
                 item.setRequest(request);
 
-                //取得路径
-                RequestMap methodMapping = getRequestMap(method);
+                //取得路径 AnnotationUtils.getAnnotation方法无法传递属性值
+                RequestMapping methodMapping = AnnotatedElementUtils.findMergedAnnotation(method, RequestMapping.class);
                 if(methodMapping == null) continue;
                 List<String> methodPath = handleRequestPath(methodMapping);
                 methodPath.addAll(0, controllerPath);
 
+                //跳过无path映射方法
+                if(methodPath.isEmpty()) continue;
+
                 //确定请求方式
-                request.setMethod(methodMapping.getMethod());
+                RequestMethod[] requestMethods = methodMapping.method();
+                RequestMethod requestMethod = requestMethods.length==0? RequestMethod.GET:requestMethods[0];
+                request.setMethod(requestMethod);
 
                 //请求url
                 PostManRequestUrl url = new PostManRequestUrl()
@@ -98,7 +93,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                         .setPath(methodPath);
                 request.setUrl(url);
 
-                switch (methodMapping.getMethod()) {
+                switch (requestMethod) {
                     case GET:
                         request.setBody(Collections.EMPTY_MAP);
                         request.setHeader(Collections.EMPTY_LIST);
@@ -114,7 +109,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                         )).setBody(generatePostRequestBody(method));
                         break;
                     default:
-                            throw new UnsupportedOperationException("不支持的请求方式:" + methodMapping.getMethod().name());
+                            throw new UnsupportedOperationException("不支持的请求方式:" + requestMethod.name());
 
                 }
 
@@ -131,20 +126,9 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
      * @param requestMapping
      * @return
      */
-    private List<String> handleRequestPath(RequestMap requestMapping) {
-        if(requestMapping == null || requestMapping.getPath().length == 0) return Collections.EMPTY_LIST;
-        return splitPath(requestMapping.getPath()[0]);
-    }
-
-
-    /**
-     * 获取请求映射路径
-     * @param requestMapping
-     * @return
-     */
     private List<String> handleRequestPath(RequestMapping requestMapping) {
-        if(requestMapping == null || requestMapping.value().length == 0) return Collections.EMPTY_LIST;
-        return splitPath(requestMapping.value()[0]);
+        String[] paths = (String[]) AnnotationUtils.getValue(requestMapping);
+        return paths==null || paths.length==0 ? new ArrayList<>() : splitPath(paths[0]);
     }
 
     /**
@@ -323,37 +307,6 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
             }
         }
         return file;
-    }
-
-
-    /**
-     * 取方法上Mapping参数
-     * @param method
-     * @return
-     */
-    private RequestMap getRequestMap(Method method) {
-        RequestMap map = new RequestMap();
-        RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
-        if(requestMapping != null) {
-            map.setPath(requestMapping.value());
-            RequestMethod requestMethod = requestMapping.method().length > 0? requestMapping.method()[0]: RequestMethod.GET;
-            map.setMethod(requestMethod);
-        }else {
-            GetMapping getMapping = method.getAnnotation(GetMapping.class);
-            if(getMapping != null) {
-                map.setPath(getMapping.value());
-                map.setMethod(RequestMethod.GET);
-            }else {
-                PostMapping postMapping = method.getAnnotation(PostMapping.class);
-                if(postMapping != null) {
-                    map.setPath(postMapping.value());
-                    map.setMethod(RequestMethod.POST);
-                }else {
-                    return null;
-                }
-            }
-        }
-        return map;
     }
 
     /**
