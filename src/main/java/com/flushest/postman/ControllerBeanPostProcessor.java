@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
+import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.stereotype.Controller;
@@ -33,6 +34,7 @@ import java.util.*;
 public class ControllerBeanPostProcessor implements BeanPostProcessor {
 
     private static Set<Class> primitiveClasses = new HashSet<>();
+    private static Map<Class, Object> defaultValues = new HashMap<>();
 
     static {
         primitiveClasses.add(Integer.class);
@@ -46,6 +48,20 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
         primitiveClasses.add(Short.class);
         primitiveClasses.add(BigInteger.class);
         primitiveClasses.add(BigDecimal.class);
+
+        defaultValues.put(Integer.class, 0);
+        defaultValues.put(Long.class, 0L);
+        defaultValues.put(Float.class, 0.1F);
+        defaultValues.put(Double.class, 0.1D);
+        defaultValues.put(Short.class, 0);
+        defaultValues.put(BigInteger.class, 0);
+        defaultValues.put(BigDecimal.class, 0.1D);
+        defaultValues.put(Character.class, ' ');
+        defaultValues.put(String.class, " ");
+        defaultValues.put(Boolean.class, false);
+        defaultValues.put(Date.class, "yyyy-MM-dd HH:mm");
+
+
     }
 
     @Autowired
@@ -183,7 +199,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
      * @return
      */
     private boolean isPrimitive(Class clazz) {
-        return clazz.isPrimitive()||primitiveClasses.contains(clazz);
+        return clazz!=null && (clazz.isPrimitive()||primitiveClasses.contains(clazz));
     }
 
 
@@ -234,7 +250,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
         String[] parameterNames = parameterNameDiscoverer.getParameterNames(method);
         Parameter[] parameters = method.getParameters();
 
-        JSONObject jsonObject = new JSONObject();
+        JSONObject jsonObject = new JSONObject(true);
         for(int i=0; i<parameterNames.length; i++) {
             Class clazz = parameters[i].getType();
             String name = parameterNames[i];
@@ -242,15 +258,15 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
             if(isPrimitive(clazz)) {
                 jsonObject.put(name, "");
             }else if(clazz.getCanonicalName().startsWith(config.getBasePackage())){
-                jsonObject.putAll(JSONObject.parseObject(toJSONString(newInstance(clazz))));
+                jsonObject.putAll(parseClassToJSON(clazz));
             }else if(Collection.class.isAssignableFrom(clazz)) { //泛型
                 Class subType = (Class) ((ParameterizedType)parameters[i].getParameterizedType()).getActualTypeArguments()[0];
                 JSONArray jsonArray = new JSONArray();
 
                 if(isPrimitive(subType)) {
-                    jsonArray.add("");
+                    jsonArray.add(defaultValues.getOrDefault(subType, " "));
                 }else if(subType.getCanonicalName().startsWith(config.getBasePackage())){
-                    jsonArray.add(JSONObject.parseObject(toJSONString(newInstance(subType))));
+                    jsonArray.add(parseClassToJSON(clazz));
                 }
 
                 jsonObject.put(name, jsonArray);
@@ -261,16 +277,37 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
     }
 
     /**
-     * 反射创建一个类对象
+     * 根据类对象解析结构返回类JSON数据
      * @param clazz
      * @return
      */
-    private Object newInstance(Class clazz) {
-        try {
-            return clazz.newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException("反射创建新对象失败：" + clazz.toGenericString());
+    private Map<String, Object> parseClassToJSON(Class clazz) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for(Method method : clazz.getMethods()) {
+            if(method.getName().startsWith("set")) {
+                String fieldName = lowerCaseInitial(method.getName().substring(3).trim());
+                if(fieldName.isEmpty()) continue;
+                //获取字段类型
+                Class type = method.getParameterTypes()[0];
+                if(type == clazz) continue;
+                if (isPrimitive(type)) {//原始数据类型
+                    map.put(fieldName, defaultValues.getOrDefault(type, " "));
+                }else if(type.getCanonicalName().startsWith(config.getBasePackage())){//业务对象
+                    map.put(fieldName, parseClassToJSON(type));
+                }else if(Map.class.isAssignableFrom(type)) {//字典对象
+                    map.put(fieldName, Collections.emptyMap());
+                }else if(Collection.class.isAssignableFrom(type)) {//列表对象
+                    ResolvableType resolvableType = ResolvableType.forClass(type);
+                    ResolvableType genericType = resolvableType.getGeneric(0);
+                    if (isPrimitive(type)) {//原始数据类型
+                        map.put(fieldName, new Object[]{defaultValues.getOrDefault(type, " ")});
+                    }else if(type.getCanonicalName().startsWith(config.getBasePackage())){//业务对象
+                        map.put(fieldName, new Map[]{parseClassToJSON(type)});
+                    }
+                }
+            }
         }
+        return map;
     }
 
     /**
