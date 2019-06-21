@@ -249,7 +249,9 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
         ParameterNameDiscoverer parameterNameDiscoverer = new DefaultParameterNameDiscoverer();
         String[] parameterNames = parameterNameDiscoverer.getParameterNames(method);
         Parameter[] parameters = method.getParameters();
-
+        if (parameterNames == null) {
+            return null;
+        }
         JSONObject jsonObject = new JSONObject(true);
         for(int i=0; i<parameterNames.length; i++) {
             Class clazz = parameters[i].getType();
@@ -283,6 +285,9 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
      */
     private Map<String, Object> parseClassToJSON(Class clazz) {
         Map<String, Object> map = new LinkedHashMap<>();
+        if(clazz == null) {
+            return map;
+        }
         for(Method method : clazz.getMethods()) {
             if(method.getName().startsWith("set")) {
                 String fieldName = lowerCaseInitial(method.getName().substring(3).trim());
@@ -299,10 +304,12 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                 }else if(Collection.class.isAssignableFrom(type)) {//列表对象
                     ResolvableType resolvableType = ResolvableType.forClass(type);
                     ResolvableType genericType = resolvableType.getGeneric(0);
-                    if (isPrimitive(type)) {//原始数据类型
+                    Class subType = genericType.getRawClass();
+                    if (subType == null) continue;
+                    if (isPrimitive(subType)) {//原始数据类型
                         map.put(fieldName, new Object[]{defaultValues.getOrDefault(type, " ")});
-                    }else if(type.getCanonicalName().startsWith(config.getBasePackage())){//业务对象
-                        map.put(fieldName, new Map[]{parseClassToJSON(type)});
+                    }else if(subType.getCanonicalName().startsWith(config.getBasePackage())){//业务对象
+                        map.put(fieldName, new Map[]{parseClassToJSON(subType)});
                     }
                 }
             }
