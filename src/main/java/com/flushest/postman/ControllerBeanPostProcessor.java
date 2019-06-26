@@ -13,6 +13,7 @@ import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.ReflectionUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -302,7 +303,11 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                 }else if(Map.class.isAssignableFrom(type)) {//字典对象
                     map.put(fieldName, Collections.emptyMap());
                 }else if(Collection.class.isAssignableFrom(type)) {//列表对象
-                    ResolvableType resolvableType = ResolvableType.forClass(type);
+                    Method getter = ReflectionUtils.findMethod(clazz, "get"+method.getName().substring(3).trim());
+                    if(getter == null) {
+                        continue;
+                    }
+                    ResolvableType resolvableType = ResolvableType.forMethodReturnType(getter);
                     ResolvableType genericType = resolvableType.getGeneric(0);
                     Class subType = genericType.getRawClass();
                     if (subType == null) continue;
@@ -384,23 +389,39 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
         JSONArray jsonArray = new JSONArray();
 
         for(int i=0; i<parameterNames.length; i++) {
-            Class clazz = classes[i];
+            jsonArray.addAll(parseClass(classes[i], parameterNames[i]));
+        }
 
-            if(clazz == MultipartFile.class) {
+        return jsonArray;
+    }
+
+    /**
+     * 解析参数对象为form-data
+     * @param clazz
+     * @param parameterName
+     * @return
+     */
+    private JSONArray parseClass(Class clazz, String parameterName) {
+        JSONArray jsonArray = new JSONArray();
+
+        if(clazz == MultipartFile.class) {
+            JSONObject jsonObject = new JSONObject();
+            jsonObject.put("key", parameterName);
+            jsonObject.put("value",null);
+            jsonObject.put("type", "file");
+            jsonArray.add(jsonObject);
+        }else {
+            if(isPrimitive(clazz)) { //原始数据类型
                 JSONObject jsonObject = new JSONObject();
-                jsonObject.put("key", parameterNames[i]);
+                jsonObject.put("key", parameterName);
                 jsonObject.put("value",null);
-                jsonObject.put("type", "file");
+                jsonObject.put("type", "text");
                 jsonArray.add(jsonObject);
             }else {
-                if(isPrimitive(clazz)) { //原始数据类型
-                    JSONObject jsonObject = new JSONObject();
-                    jsonObject.put("key", parameterNames[i]);
-                    jsonObject.put("value",null);
-                    jsonObject.put("type", "text");
-                    jsonArray.add(jsonObject);
-                }else {
-
+                for(Method method : clazz.getDeclaredMethods()) {
+                    if(method.getName().startsWith("get")) {
+                        jsonArray.addAll(parseClass(method.getReturnType(), lowerCaseInitial(method.getName().substring(3).trim())));
+                    }
                 }
             }
         }
@@ -418,7 +439,7 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
         Map<String, Object> body = new HashMap<>();
         String mode = "raw";
         for(Class parameterClass : method.getParameterTypes()) {
-            if(parameterClass == MultipartFile.class) {
+            if(containMultipartFile(parameterClass, new HashSet<>(primitiveClasses))) {
                 mode = "formdata";
             }
         }
@@ -433,5 +454,27 @@ public class ControllerBeanPostProcessor implements BeanPostProcessor {
                 body.put(mode, toJSONArray(method));
         }
         return body;
+    }
+
+    /**
+     * 包含文件类
+     * @param clazz
+     * @return
+     */
+    private boolean containMultipartFile(Class clazz, Set<Class> notContainSet) {
+        if(clazz == MultipartFile.class) {
+            return true;
+        }
+        //避免无限递归
+        notContainSet.add(clazz);
+        for(Method method : clazz.getDeclaredMethods()) {
+            if(method.getName().startsWith("get")) {
+                Class returnClass = method.getReturnType();
+                if(!notContainSet.contains(returnClass)&&containMultipartFile(returnClass, notContainSet)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }
